@@ -1,0 +1,16 @@
+# Ignore large files and models
+models/
+data/
+db/
+logs/
+snapshots/
+*.pt
+*.onnx
+*.h5
+*.zip
+*.csv
+*.mp4
+__pycache__/
+.env/
+.venv/
+.DS_Store

@@ -1,0 +1,64 @@
+system_hrms/
+│
+├── one_to_many_face_attendance/
+│   │
+│   ├── data/
+│   │   └── employees/                  # Ảnh gốc (tùy chọn lưu thêm khi enroll)
+│   │
+│   ├── db/
+│   │   ├── employees.json              # Database nhân viên (thông tin + embedding)
+│   │   └── attendance.csv              # Lịch sử check-in / check-out
+│   │
+│   ├── logs/
+│   │   └── attendance/                 # Snapshot check-in/out (ảnh minh chứng)
+│   │
+│   ├── models/
+│   │   ├── build.py                    # Load model YOLOv8 + ArcFace
+│   │   └── yolov8n-face.pt             # YOLO nhỏ chuyên detect mặt (tiny)
+│   │
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── detect_faces.py             # YOLO detect khuôn mặt
+│   │   ├── extract_embeddings.py       # Sinh embedding bằng ArcFace
+│   │   ├── recognize.py                # So khớp embedding → trả về (id, name)
+│   │   ├── enroll.py                   # Đăng ký khuôn mặt (không cần bbox)
+│   │   ├── attendance.py               # Ghi log CSV check-in/check-out
+│   │   ├── realtime_attendance.py      # Hệ thống camera real-time (multi-face)
+│   │   ├── report.py                   # Thống kê, biểu đồ HR
+│   │   └── utils.py                    # Snapshot, cooldown, cosine similarity
+│   │
+│   ├── requirements.txt                # Danh sách thư viện (torch, ultralytics, opencv, numpy, pandas)
+│   └── main.py                         # Entry point (menu: Enroll / Realtime / Report)
+│
+│
+├── one_to_one_access_control/
+│   │
+│   ├── db/
+│   │   ├── employees.json              # Dùng chung embedding nhân viên
+│   │   └── access_logs.csv             # Ghi lịch sử vào/ra hệ thống (time, id, result)
+│   │
+│   ├── logs/
+│   │   └── access/                     # Snapshot Access Granted / Denied
+│   │
+│   ├── models/
+│   │   ├── yolov8n-face.pt             # Dùng lại model detect
+│   │   ├── facenet_model.pth           # ArcFace hoặc FaceNet (embedding)
+│   │   └── spoof_detector.pth          # Model Anti-Spoof (ảnh/video giả mạo)
+│   │
+│   ├── src/
+│   │   ├── detect_faces.py             # YOLO detect khuôn mặt
+│   │   ├── extract_embeddings.py       # Sinh embedding từ ảnh
+│   │   ├── recognize.py                # So khớp embedding (return emp_id, name)
+│   │   ├── verify.py                   # One-to-One verification logic
+│   │   ├── spoof_check.py              # Anti-spoofing check (real/fake)
+│   │   ├── utils.py                    # Snapshot, cooldown, cosine similarity
+│   │   └── attendance.py               # (Optional - ghi lại trạng thái truy cập)
+│   │
+│   ├── requirements.txt                # Các thư viện dùng riêng cho one-to-one
+│   └── main.py                         # Entry point chạy Access Control (Realtime Verify)
+│
+│
+└── shared/
+    ├── arcface_pretrained.onnx          # Shared model ArcFace cho cả 2 module
+    └── spoof_pretrained.onnx            # Model dùng chung nếu muốn đồng bộ training
+
