@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import time
+
 from src.detect_faces import detect_and_crop_faces
 from src.extract_embeddings import get_embedding
 
@@ -12,17 +13,16 @@ from src.extract_embeddings import get_embedding
 CSV_PATH = "db/data_employee.csv"
 DB_PATH = "db/employees.json"
 IMG_SAVE_DIR = "data/employees"
+AVATAR_NAME = "avatar.jpg"
 
 # === Capture Configuration ===
-CAPTURE_DURATION = 18          # total duration in seconds
-CAPTURE_INTERVAL = 0.4         # capture every 0.4s
-MAX_SAMPLES = 30               # max number of images
-STAGE_DURATION = 6             # seconds per stage (look forward/left/right)
+CAPTURE_DURATION = 18
+CAPTURE_INTERVAL = 0.4
+MAX_SAMPLES = 30
+STAGE_DURATION = 6
 
 
-# ===== Helper functions =====
 def load_csv():
-    """Load CSV file containing employee information"""
     return pd.read_csv(CSV_PATH)
 
 
@@ -44,25 +44,39 @@ def _save_db(db):
         json.dump(db, f, indent=4, ensure_ascii=False)
 
 
-# ===== Main enrollment function =====
-def enroll_employee(emp_id: str):
-    """Enroll a new employee by automatically capturing and saving face embeddings."""
-    df = load_csv()
-    try:
-        row = df[df["Employee ID"] == int(emp_id)].iloc[0]
-    except Exception:
-        print(f"[ERROR] Employee ID {emp_id} not found in CSV file.")
-        return
+def enroll_employee(emp_id: str, full_name: str = None, department: str = None, position: str = None):
+    """Enroll a new employee by capturing multiple images, embeddings, and avatar.
 
-    full_name, department, position = row["Full Name"], row["Department"], row["Position"]
+    If `full_name`, `department` or `position` are not provided they will be
+    looked up from the CSV (`db/data_employee.csv`). If lookup fails and any
+    required field is still missing, the function will abort with an error.
+    """
+
+    # If any profile fields are missing, attempt to load from CSV
+    if full_name is None or department is None or position is None:
+        df = load_csv()
+        try:
+            row = df[df["Employee ID"] == int(emp_id)].iloc[0]
+        except Exception:
+            # If CSV lookup failed and we still miss required fields, abort
+            if full_name is None or department is None or position is None:
+                print(f"[ERROR] Employee ID {emp_id} not found in CSV file and missing profile fields.")
+                return
+        else:
+            # Fill any missing values from CSV (preserve provided values)
+            if full_name is None:
+                full_name = row["Full Name"]
+            if department is None:
+                department = row["Department"]
+            if position is None:
+                position = row["Position"]
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("[ERROR] Cannot access the camera.")
         return
 
-    print(f"[INFO] Starting face enrollment for {full_name} (ID {emp_id})")
-    print(f"[INFO] Duration: {CAPTURE_DURATION}s — Press 'q' to quit early.")
+    print(f"[INFO] Starting enrollment for {full_name} (ID {emp_id})")
 
     save_dir = _ensure_dirs(emp_id)
     embeddings = []
@@ -70,12 +84,13 @@ def enroll_employee(emp_id: str):
     start_time = time.time()
     last_capture = 0.0
 
-    # === Stage instructions ===
     stages = [
         ("Look straight at the camera", (0, 255, 0)),
-        ("Slowly turn your head to the LEFT", (255, 255, 0)),
-        ("Slowly turn your head to the RIGHT", (255, 0, 255))
+        ("Slowly turn your head LEFT", (255, 255, 0)),
+        ("Slowly turn your head RIGHT", (255, 0, 255))
     ]
+
+    avatar_saved = False  # <– to store first clear face
 
     while True:
         ret, frame = cap.read()
@@ -84,52 +99,45 @@ def enroll_employee(emp_id: str):
 
         now = time.time()
         elapsed = now - start_time
+
         if elapsed >= CAPTURE_DURATION or saved >= MAX_SAMPLES:
             break
 
-        # Determine current stage
         stage_idx = int(elapsed // STAGE_DURATION)
-        if stage_idx >= len(stages):
-            stage_idx = len(stages) - 1
+        stage_idx = min(stage_idx, len(stages) - 1)
         instruction, color = stages[stage_idx]
 
-        # Overlay display
+        # Overlay text
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (frame.shape[1], 70), (0, 0, 0), -1)
-        cv2.putText(
-            overlay,
-            f"Capturing ({saved}/{MAX_SAMPLES}) | {CAPTURE_DURATION - elapsed:.1f}s left",
-            (16, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 255, 255),
-            2,
-        )
-        cv2.putText(
-            overlay,
-            f"Instruction: {instruction}",
-            (16, 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            color,
-            2,
-        )
-        cv2.imshow("Face Enrollment (guided)", overlay)
+        cv2.putText(overlay, f"Capturing ({saved}/{MAX_SAMPLES}) | {CAPTURE_DURATION - elapsed:.1f}s left",
+                    (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(overlay, f"Instruction: {instruction}", (16, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        cv2.imshow("Face Enrollment", overlay)
 
-        # Capture periodically
         if now - last_capture >= CAPTURE_INTERVAL:
+
             faces = detect_and_crop_faces(frame)
+
             if faces:
+                # pick largest face
                 face = sorted(faces, key=lambda f: f.shape[0] * f.shape[1], reverse=True)[0]
+
                 emb = get_embedding(face)
-                if emb is not None and np.linalg.norm(emb) > 0:
+                if emb is not None:
                     embeddings.append(emb)
 
-                # Save image
-                filename = os.path.join(
-                    save_dir, f"{emp_id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
-                )
+                # Save dataset sample
+                filename = os.path.join(save_dir, f"{emp_id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg")
                 cv2.imwrite(filename, face)
+
+                # Save avatar if not saved yet (FIRST GOOD FACE)
+                if not avatar_saved:
+                    avatar_path = os.path.join(save_dir, AVATAR_NAME)
+                    cv2.imwrite(avatar_path, face)
+                    avatar_saved = True
+
                 saved += 1
                 last_capture = now
 
@@ -140,26 +148,23 @@ def enroll_employee(emp_id: str):
     cap.release()
     cv2.destroyAllWindows()
 
-    # === Save embeddings ===
+    # === Save DB Entry ===
     if not embeddings:
-        print("[WARN] No valid faces captured.")
+        print("[WARN] No valid embeddings captured.")
         return
 
     mean_emb = (sum(embeddings) / len(embeddings)).tolist()
+
     db = _load_db()
     db[str(emp_id)] = {
         "name": full_name,
         "department": department,
         "position": position,
         "embedding": mean_emb,
+        "avatar": f"{save_dir}/{AVATAR_NAME}"  # <— EXACTLY WHAT REALTIME USES
     }
     _save_db(db)
 
-    print(f"[INFO]  Enrollment completed for {full_name} (ID {emp_id}).")
-    print(f"[INFO] Saved {saved} face samples at: {save_dir}")
-
-
-# ===== Entry point =====
-if __name__ == "__main__":
-    emp_id = input("Enter Employee ID: ")
-    enroll_employee(emp_id)
+    print(f"[INFO] Enrollment completed for {full_name}.")
+    print(f"[INFO] Avatar saved at: {save_dir}/{AVATAR_NAME}")
+    print(f"[INFO] {saved} face samples stored.")

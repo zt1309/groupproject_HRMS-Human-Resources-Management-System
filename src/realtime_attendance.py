@@ -1,148 +1,226 @@
 import cv2
 import time
 import os
+import json
 from datetime import datetime
 from collections import defaultdict
 
-from src.detect_faces import yolo
+from src.video_stream import WebcamStream
+from src.detect_faces import detect_faces
 from src.recognize import recognize
 from src.attendance import log_attendance
-from src.antispoof import check_liveness  # Add anti-spoofing
+from src.antispoof import check_liveness
+from config import (
+    EMPLOYEES_JSON,
+    SNAPSHOT_DIR,
+    DISPLAY_DURATION,
+    AVATAR_SIZE,
+    LIVENESS_CHECK_INTERVAL,
+    RECOGNITION_INTERVAL,
+    SAVE_SNAPSHOTS
+)
 
-# ======================
-# Time Configuration
-# ======================
-GLOBAL_COOLDOWN = 1.2    # delay between 2 persons (seconds)
-PER_EMP_COOLDOWN = 5.0   # prevent duplicate logs for same employee (seconds)
-DISPLAY_DURATION = 2.0   # keep name displayed after check (seconds)
+DB_PATH = EMPLOYEES_JSON
 
-# ======================
-# Snapshot Configuration
-# ======================
-SNAPSHOT_DIR = "snapshots"  # snapshots/<emp_id>/*.jpg
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
+# ===== STATUS BAR DATA =====
+last_display_name = None
+last_display_time = None
+last_display_timestamp = 0.0
+last_avatar = None
+last_status_text = None
+last_status_color = (255, 255, 255)
 
-def save_snapshot(emp_id, face):
-    """Save cropped face image to snapshots/<emp_id>/"""
+
+# -----------------------
+# Load DB
+# -----------------------
+def load_db():
+    if not os.path.exists(DB_PATH):
+        print("[WARN] employees.json not found.")
+        return {}
+    with open(DB_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+# -----------------------
+# Load Avatar
+# -----------------------
+def load_avatar(emp_id):
+    db = load_db()
     try:
-        emp_dir = os.path.join(SNAPSHOT_DIR, str(emp_id))
-        os.makedirs(emp_dir, exist_ok=True)
-        filename = f"{emp_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        cv2.imwrite(os.path.join(emp_dir, filename), face)
-    except Exception as e:
-        print(f"[WARN] Failed to save snapshot for {emp_id}: {e}")
+        avatar_path = db[emp_id].get("avatar", None)
+        if avatar_path and os.path.exists(avatar_path):
+            img = cv2.imread(avatar_path)
+            return cv2.resize(img, AVATAR_SIZE)
+    except:
+        pass
+    return None
 
 
+# -----------------------
+# MAIN REALTIME FUNCTION
+# -----------------------
 def realtime_attendance():
-    cap = cv2.VideoCapture(0)
-    print("[INFO] Realtime Attendance System Started (press 'q' to quit)")
+    global last_display_name, last_display_time, last_display_timestamp
+    global last_avatar, last_status_text, last_status_color
 
-    # Store timestamps for logging and display
-    last_any_log = 0.0
-    last_emp_log = defaultdict(lambda: 0.0)
-    last_display = defaultdict(lambda: 0.0)
+    cap = WebcamStream(src=0).start()
+    print("[INFO] Realtime Attendance Started — Press Q to quit.\n")
+
+    frame_count = 0
+    prev_time = time.time()
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+        frame = cap.read()
+        if frame is None:
+            continue
 
         now = time.time()
-        results = yolo(frame)
-        annotated = results[0].plot()
+        frame_count += 1
 
-        # Check cooldown between persons (queue)
-        global_ready = (now - last_any_log) >= GLOBAL_COOLDOWN
+        # ===== FPS =====
+        diff = now - prev_time
+        fps = 1 / diff if diff > 0 else 0
+        prev_time = now
+        print(f"[FPS] {fps:.1f}")
 
-        for r in results:
-            boxes = r.boxes.xyxy.cpu().numpy()
+        # ===== Resize =====
+        frame_small = cv2.resize(frame, (640, 480))
 
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box[:4])
-                face = frame[y1:y2, x1:x2]
-                if face.size <= 0:
-                    continue
+        # ===== YOLO DETECT =====
+        start_detect = time.time()
+        boxes = detect_faces(frame_small)
+        detect_ms = (time.time() - start_detect) * 1000
+        print(f"[YOLO] {len(boxes)} face(s) — {detect_ms:.2f} ms")
 
-                # Anti-spoofing check
+        annotated = frame_small.copy()
+
+        for (x1, y1, x2, y2) in boxes:
+
+            face = frame_small[y1:y2, x1:x2]
+            if face.size <= 0:
+                continue
+
+            # ===== LIVENESS =====
+            if frame_count % LIVENESS_CHECK_INTERVAL == 0:
+                start_live = time.time()
                 is_real = check_liveness(face)
+                live_ms = (time.time() - start_live) * 1000
+                print(f"[LIVENESS] real={is_real} — {live_ms:.2f} ms")
+
                 if not is_real:
-                    cv2.putText(
-                        annotated,
-                        "FAKE FACE DETECTED!",
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2,
-                    )
+                    # Update status bar for FAKE
+                    last_display_name = "Unknown"
+                    last_status_text = "FAKE"
+                    last_status_color = (0, 0, 255)
+                    last_display_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    last_display_timestamp = now
+                    last_avatar = cv2.resize(face, AVATAR_SIZE)
                     continue
 
-                # Face recognition
-                emp_id, name = recognize(face)
-                if emp_id is None or name == "Unknown":
-                    continue
+            # ===== RECOGNITION =====
+            if frame_count % RECOGNITION_INTERVAL != 0:
+                continue
 
-                # Per-employee cooldown
-                if (now - last_emp_log[emp_id]) < PER_EMP_COOLDOWN:
-                    if now - last_display[emp_id] <= DISPLAY_DURATION:
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(
-                            annotated,
-                            f"{emp_id} - {name}",
-                            (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            (0, 255, 0),
-                            2,
-                        )
-                    continue
+            start_rec = time.time()
+            emp_id, name = recognize(face)
+            rec_ms = (time.time() - start_rec) * 1000
+            print(f"[RECOGNIZE] ID={emp_id}, Name={name}, {rec_ms:.2f} ms")
 
-                # Not ready for next person
-                if not global_ready:
-                    cv2.putText(
-                        annotated,
-                        "Please wait... next person in queue",
-                        (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (0, 255, 255),
-                        2,
-                    )
-                    continue
+            if emp_id is None:
+                # Unknown but real person
+                last_display_name = "Unknown"
+                last_status_text = "REAL (Unknown)"
+                last_status_color = (0, 255, 255)
+                last_display_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                last_display_timestamp = now
+                last_avatar = cv2.resize(face, AVATAR_SIZE)
+                continue
 
-                # Log attendance (Check-in / Check-out)
-                log_attendance(emp_id)
-                save_snapshot(emp_id, face)
+            # ===== LOG ATTENDANCE =====
+            print(f"[LOG] Attendance recorded → {emp_id} - {name}\n")
+            log_attendance(emp_id)
+            
+            # ===== SAVE SNAPSHOT =====
+            if SAVE_SNAPSHOTS:
+                try:
+                    emp_snapshot_dir = os.path.join(SNAPSHOT_DIR, str(emp_id))
+                    os.makedirs(emp_snapshot_dir, exist_ok=True)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    snapshot_filename = f"snapshot_{timestamp}.jpg"
+                    snapshot_path = os.path.join(emp_snapshot_dir, snapshot_filename)
+                    
+                    cv2.imwrite(snapshot_path, face)
+                    print(f"[SNAPSHOT] Saved: {snapshot_path}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to save snapshot: {e}")
 
-                # Display info
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(
-                    annotated,
-                    f"{emp_id} - {name}",
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2,
-                )
+            # ===== UPDATE STATUS BAR =====
+            last_display_name = name
+            last_status_text = "REAL"
+            last_status_color = (0, 255, 0)
+            last_display_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            last_display_timestamp = now
 
-                # Update timestamps
-                last_emp_log[emp_id] = now
-                last_display[emp_id] = now
-                last_any_log = now
-                global_ready = False
-                break  # prevent duplicate logs in same frame
+            avatar = load_avatar(emp_id)
+            if avatar is not None:
+                last_avatar = avatar
+            else:
+                last_avatar = cv2.resize(face, AVATAR_SIZE)
 
-        # Display frame
-        cv2.imshow("Realtime Attendance (Queue Mode)", annotated)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    cap.release()
+        # ===== STATUS BAR =====
+        elapsed = now - last_display_timestamp
+        if last_display_name and elapsed <= DISPLAY_DURATION:
+
+            h, w, _ = annotated.shape
+            bar_h = 100
+
+            overlay = annotated.copy()
+            cv2.rectangle(overlay, (0, h - bar_h), (w, h), (0, 0, 0), -1)
+            annotated = cv2.addWeighted(overlay, 0.55, annotated, 0.45, 0)
+
+            # Avatar
+            ax, ay = 20, h - bar_h + 10
+            annotated[ay:ay+70, ax:ax+70] = last_avatar
+
+            tx = ax + 90
+
+            # NAME
+            cv2.putText(annotated, f"Employee: {last_display_name}",
+                        (tx, h - bar_h + 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                        (255, 255, 255), 2)
+
+            # STATUS (REAL / FAKE / UNKNOWN)
+            cv2.putText(annotated, f"Status: {last_status_text}",
+                        (tx, h - bar_h + 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                        last_status_color, 2)
+
+            # TIME
+            cv2.putText(annotated, f"Time: {last_display_time}",
+                        (tx, h - bar_h + 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                        (200, 200, 200), 2)
+
+        # ===== SHOW =====
+        cv2.imshow("Realtime Attendance", annotated)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.stop()
     cv2.destroyAllWindows()
 
 
-if __name__ == "__main__":
-    realtime_attendance()
+
+
+
+
+
 

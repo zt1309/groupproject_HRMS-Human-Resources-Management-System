@@ -1,23 +1,48 @@
 import cv2
+import os
 from ultralytics import YOLO
 
-#load my model yolo
-yolo = YOLO("models/yolov8n-face-lindevs.pt")
+# Load YOLO model - use relative path
+MODEL_PATH = os.path.join("models", "yolov8n-face-lindevs.pt")
+model = YOLO(MODEL_PATH)
+
+def detect_faces(frame):
+    """Return face bounding boxes in original frame size."""
+    h, w = frame.shape[:2]
+    inp = 480
+
+    small = cv2.resize(frame, (inp, inp))
+
+    results = model.predict(
+        small,
+        imgsz=inp,
+        conf=0.5,
+        iou=0.4,
+        max_det=5,
+        verbose=False
+    )
+
+    out = []
+    for r in results:
+        for (x1, y1, x2, y2, *_ ) in r.boxes.xyxy.cpu().numpy():
+            out.append([
+                int(x1 * w / inp),
+                int(y1 * h / inp),
+                int(x2 * w / inp),
+                int(y2 * h / inp)
+            ])
+    return out
+
 
 def detect_and_crop_faces(frame):
-    """
-    Detect khuôn mặt trong frame và trả về list ảnh khuôn mặt crop
-    """
-    results = yolo(frame)  # YOLO inference
+    """Backward-compatible: return cropped faces."""
+    boxes = detect_faces(frame)
     faces = []
 
-    for r in results:
-        boxes = r.boxes.xyxy.cpu().numpy()  # bounding boxes [x1,y1,x2,y2]
-        for box in boxes:
-            x1, y1, x2, y2 = map(int, box[:4])
-            face = frame[y1:y2, x1:x2]
-            if face.size > 0:
-                faces.append(face)
+    for (x1, y1, x2, y2) in boxes:
+        face = frame[y1:y2, x1:x2]
+        if face.size > 0:
+            faces.append(face)
 
     return faces
 
@@ -29,16 +54,14 @@ if __name__ == "__main__":
         if not ret:
             break
 
-        faces = detect_and_crop_faces(frame)
+        for (x1, y1, x2, y2) in detect_faces(frame):
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
 
-        # draw bounding boxes for debug
-        results = yolo(frame)
-        annotated = results[0].plot()
-
-        cv2.imshow("YOLO Face Detection", annotated)
-
+        cv2.imshow("YOLO Face Detection", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     cap.release()
     cv2.destroyAllWindows()
+
+
