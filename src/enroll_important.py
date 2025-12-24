@@ -11,7 +11,7 @@ from src.extract_embeddings import get_embedding
 
 
 # === Data paths ===
-CSV_PATH = "db/important_employee.csv"          # VIP employee list (CSV)
+CSV_PATH = "db/important_employee.csv"          # employee list (CSV)
 DB_PATH = "db/important_employees.json"         # JSON DB storing VIP embeddings
 IMG_SAVE_DIR = "data/employees_important"       # directory to save face images
 
@@ -24,7 +24,7 @@ MAX_SAMPLES = 30             # maximum number of images to collect
 
 # === Helper functions ===
 def load_csv():
-    """Read VIP employee list from CSV"""
+    """Read employee list from CSV"""
     return pd.read_csv(CSV_PATH)
 
 
@@ -57,25 +57,38 @@ def _save_db(db):
 
 
 # === Main enroll function ===
-def enroll_important(emp_id):
-    """Enroll a VIP employee by collecting face crops and embeddings."""
-    df = load_csv()
-    try:
-        row = df[df["Employee ID"] == int(emp_id)].iloc[0]
-    except Exception:
-        print(f"[ERROR] Employee ID {emp_id} not found in CSV.")
-        return
+def enroll_important(emp_id, full_name: str = None, department: str = None, position: str = None):
+    """Enroll a VIP employee by collecting face crops and embeddings.
 
-    full_name = row["Full Name"]
-    department = row["Department"]
-    position = row["Position"]
+    If `full_name`, `department` or `position` are not provided they will be
+    looked up from the CSV (`db/important_employee.csv`). If lookup fails and any
+    required field is still missing, the function will abort with an error.
+    """
+    # If any profile fields are missing, attempt to load from CSV
+    if full_name is None or department is None or position is None:
+        df = load_csv()
+        try:
+            row = df[df["Employee ID"] == int(emp_id)].iloc[0]
+        except Exception:
+            # If CSV lookup failed and we still miss required fields, abort
+            if full_name is None or department is None or position is None:
+                print(f"[ERROR] Employee ID {emp_id} not found in CSV.")
+                return
+        else:
+            # Fill any missing values from CSV (preserve provided values)
+            if full_name is None:
+                full_name = row["Full Name"]
+            if department is None:
+                department = row["Department"]
+            if position is None:
+                position = row["Position"]
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("[ERROR] Unable to open camera.")
         return
 
-    print(f"[INFO] Starting VIP enrollment for {full_name} (ID {emp_id})...")
+    print(f"[INFO] Starting enrollment for {full_name} (ID {emp_id})...")
     print("[INFO] Please look at the camera. Press 'q' to quit early.")
 
     embeddings = []
@@ -106,7 +119,7 @@ def enroll_important(emp_id):
             2,
         )
 
-        cv2.imshow("Enroll Important (VIP Mode)", overlay)
+        cv2.imshow("Enroll Important ", overlay)
 
         now = time.time()
         if now - last_cap >= CAPTURE_INTERVAL and saved < MAX_SAMPLES:
@@ -152,9 +165,9 @@ def enroll_important(emp_id):
     }
     _save_db(db)
 
-    print(f"[INFO] VIP enrollment completed for {full_name} (ID {emp_id}) — {saved} images saved at {save_dir}")
+    print(f"[INFO]  enrollment completed for {full_name} (ID {emp_id}) — {saved} images saved at {save_dir}")
 
 
 if __name__ == "__main__":
-    emp_id = input("Enter Employee ID (VIP): ")
+    emp_id = input("Enter Employee ID : ")
     enroll_important(emp_id)

@@ -1,0 +1,2 @@
+# This file ensures the snapshots directory is tracked by git
+# Snapshots are saved here during face recognition for admin/HR review

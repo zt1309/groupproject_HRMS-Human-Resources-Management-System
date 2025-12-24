@@ -8,7 +8,6 @@ ATTENDANCE_PATH = "logs/attendance.csv"
 
 
 def load_db():
-    """Load employees.json"""
     if not os.path.exists(DB_PATH):
         return {}
     with open(DB_PATH, "r", encoding="utf-8") as f:
@@ -16,18 +15,34 @@ def load_db():
 
 
 def init_csv():
-    """Tạo file attendance.csv nếu chưa có"""
+    os.makedirs(os.path.dirname(ATTENDANCE_PATH), exist_ok=True)
+
     if not os.path.exists(ATTENDANCE_PATH):
         with open(ATTENDANCE_PATH, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                "Employee ID", "Full Name", "Department", "Position",
-                "Date", "CheckIn", "CheckOut"
-            ])
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "Employee ID",
+                    "Full Name",
+                    "Department",
+                    "Position",
+                    "Date",
+                    "CheckIn",
+                    "CheckOut",
+                    "LivenessResult",
+                    "LivenessScore",
+                    "Note"
+                ]
+            )
             writer.writeheader()
 
 
-def log_attendance(emp_id):
-    """Log attendance: lần đầu -> CheckIn, lần sau -> CheckOut"""
+def log_attendance(
+    emp_id,
+    liveness_result="REAL",
+    liveness_score=None,
+    note=""
+):
     init_csv()
     db = load_db()
 
@@ -40,22 +55,22 @@ def log_attendance(emp_id):
     time_str = datetime.now().strftime("%H:%M:%S")
 
     rows = []
-    found = False
+    found_today = False
 
-    # đọc tất cả record hiện tại
     with open(ATTENDANCE_PATH, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # nếu đã có CheckIn cho hôm nay, thì lần này cập nhật CheckOut
             if row["Employee ID"] == str(emp_id) and row["Date"] == date_str:
                 if row["CheckOut"] == "":
                     row["CheckOut"] = time_str
-                    print(f"[INFO] {emp['name']} đã CheckOut lúc {time_str}")
-                found = True
+                    row["LivenessResult"] = liveness_result
+                    row["LivenessScore"] = liveness_score if liveness_score is not None else ""
+                    row["Note"] = note
+                    print(f"[INFO] {emp['name']} CheckOut in {time_str}")
+                found_today = True
             rows.append(row)
 
-    # nếu chưa có record hôm nay -> thêm CheckIn mới
-    if not found:
+    if not found_today:
         new_row = {
             "Employee ID": emp_id,
             "Full Name": emp["name"],
@@ -63,19 +78,33 @@ def log_attendance(emp_id):
             "Position": emp["position"],
             "Date": date_str,
             "CheckIn": time_str,
-            "CheckOut": ""
+            "CheckOut": "",
+            "LivenessResult": liveness_result,
+            "LivenessScore": liveness_score if liveness_score is not None else "",
+            "Note": note
         }
         rows.append(new_row)
-        print(f"[INFO] {emp['name']} đã CheckIn lúc {time_str}")
+        print(f"[INFO] {emp['name']} CheckIn lúc {time_str}")
 
-    # ghi lại tất cả record
     with open(ATTENDANCE_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "Employee ID", "Full Name", "Department", "Position",
-            "Date", "CheckIn", "CheckOut"
-        ])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "Employee ID",
+                "Full Name",
+                "Department",
+                "Position",
+                "Date",
+                "CheckIn",
+                "CheckOut",
+                "LivenessResult",
+                "LivenessScore",
+                "Note"
+            ]
+        )
         writer.writeheader()
         writer.writerows(rows)
+
 
 
 

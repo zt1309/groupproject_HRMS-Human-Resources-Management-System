@@ -44,32 +44,17 @@ def _save_db(db):
         json.dump(db, f, indent=4, ensure_ascii=False)
 
 
-def enroll_employee(emp_id: str, full_name: str = None, department: str = None, position: str = None):
-    """Enroll a new employee by capturing multiple images, embeddings, and avatar.
+def enroll_employee(emp_id: str):
+    """Enroll a new employee by capturing multiple images, embeddings, and avatar."""
 
-    If `full_name`, `department` or `position` are not provided they will be
-    looked up from the CSV (`db/data_employee.csv`). If lookup fails and any
-    required field is still missing, the function will abort with an error.
-    """
+    df = load_csv()
+    try:
+        row = df[df["Employee ID"] == int(emp_id)].iloc[0]
+    except Exception:
+        print(f"[ERROR] Employee ID {emp_id} not found in CSV file.")
+        return
 
-    # If any profile fields are missing, attempt to load from CSV
-    if full_name is None or department is None or position is None:
-        df = load_csv()
-        try:
-            row = df[df["Employee ID"] == int(emp_id)].iloc[0]
-        except Exception:
-            # If CSV lookup failed and we still miss required fields, abort
-            if full_name is None or department is None or position is None:
-                print(f"[ERROR] Employee ID {emp_id} not found in CSV file and missing profile fields.")
-                return
-        else:
-            # Fill any missing values from CSV (preserve provided values)
-            if full_name is None:
-                full_name = row["Full Name"]
-            if department is None:
-                department = row["Department"]
-            if position is None:
-                position = row["Position"]
+    full_name, department, position = row["Full Name"], row["Department"], row["Position"]
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():

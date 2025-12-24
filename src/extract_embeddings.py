@@ -13,11 +13,7 @@ input_name = session.get_inputs()[0].name
 
 
 def preprocess_face(face_img):
-    """
-    Chuẩn hoá ảnh khuôn mặt trước khi đưa vào ArcFace.
-    Input: ảnh BGR (numpy)
-    Output: tensor (1, 3, 112, 112)
-    """
+    
     face = cv2.resize(face_img, (112, 112))
     face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
     face = (face / 127.5 - 1.0).astype(np.float32)
@@ -26,11 +22,6 @@ def preprocess_face(face_img):
     return face
 
 def get_embedding(face_img):
-    """
-    Trích xuất embedding từ ảnh khuôn mặt.
-    Input: face_img (numpy BGR)
-    Output: vector 512 chiều (numpy)
-    """
     try:
         input_blob = preprocess_face(face_img)
         emb = session.run(None, {input_name: input_blob})[0].flatten()
